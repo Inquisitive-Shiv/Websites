@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dictate — voice-paced reading</title>
+<title>Dictation — voice-paced reading</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=Playfair+Display:ital,wght@1,500&display=swap" rel="stylesheet">
 <style>
@@ -117,7 +117,7 @@
     margin-bottom: 0;
   }
   .settings.open {
-    max-height: 220px;
+    max-height: 400px;
     margin-bottom: 28px;
   }
   .settings-inner {
@@ -131,7 +131,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding: 10px 0;
+    padding: 12px 0;
+    flex-wrap: wrap;
   }
   .setting-row + .setting-row { border-top: 1px solid var(--border); }
   .setting-label { font-size: 13px; color: var(--text); }
@@ -148,6 +149,19 @@
     min-width: 34px;
     text-align: right;
   }
+
+  select.method-select {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    outline: none;
+    cursor: pointer;
+  }
+  select.method-select:focus { border-color: var(--accent-dim); }
 
   /* Text input */
   textarea#source {
@@ -183,6 +197,8 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .status-text {
@@ -202,6 +218,7 @@
   }
   .status-led.speaking { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.1s infinite ease-in-out; }
   .status-led.listening { background: var(--danger); box-shadow: 0 0 8px var(--danger); animation: pulse .9s infinite ease-in-out; }
+  .status-led.waiting-key { background: #e0c256; box-shadow: 0 0 8px #e0c256; animation: pulse 1.3s infinite ease-in-out; }
 
   @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -230,7 +247,7 @@
     transition: width .3s ease;
   }
 
-  /* Level meter — minimal bars, only animate while listening */
+  /* Level meter — minimal bars, only animate while listening for voice */
   .meter {
     display: flex;
     align-items: flex-end;
@@ -246,12 +263,31 @@
     transition: background .2s ease;
   }
   .meter.active span { background: var(--danger); }
+  .meter.key-wait span { background: #e0c256; height: 20% !important; }
+
+  /* Key badge shown while waiting for Enter/Space */
+  .key-badge {
+    display: none;
+    justify-content: center;
+    margin-bottom: 22px;
+  }
+  .key-badge.show { display: flex; }
+  .key-badge kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: #e0c256;
+    border: 1px solid #4a4326;
+    background: #1a1810;
+    padding: 6px 14px;
+    border-radius: 6px;
+  }
 
   /* Controls */
   .controls {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
   }
 
   .btn {
@@ -326,7 +362,7 @@
     <div class="brand">
       <span class="dot"></span>
       <h1>Dictate</h1>
-      <span class="tag">say "ok" to continue</span>
+      <span class="tag" id="modeTag">press Space to continue</span>
     </div>
     <button class="icon-btn" id="settingsToggle" aria-label="Settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
@@ -337,8 +373,21 @@
     <div class="settings-inner">
       <div class="setting-row">
         <div>
+          <div class="setting-label">Continue method</div>
+          <div class="setting-sub">How you tell it to move on after a pause</div>
+        </div>
+        <div class="setting-control">
+          <select class="method-select" id="continueMethod">
+            <option value="space" selected>Space key</option>
+            <option value="enter">Enter key</option>
+            <option value="voice">Voice — say "ok"</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
           <div class="setting-label">Words per pause</div>
-          <div class="setting-sub">How many words are read before it stops and waits for "ok"</div>
+          <div class="setting-sub">How many words are read before it stops and waits</div>
         </div>
         <div class="setting-control">
           <input type="range" id="chunkSize" min="3" max="50" value="15">
@@ -351,17 +400,8 @@
           <div class="setting-sub">Voice playback rate</div>
         </div>
         <div class="setting-control">
-          <input type="range" id="rate" min="0.5" max="1.5" step="0.1" value="0.9">
-          <span class="setting-value" id="rateVal">0.9x</span>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">Resume word</div>
-          <div class="setting-sub">Word the microphone listens for</div>
-        </div>
-        <div class="setting-control">
-          <span class="setting-value" style="color:var(--text)">"ok"</span>
+          <input type="range" id="rate" min="0.5" max="1.5" step="0.1" value="0.85">
+          <span class="setting-value" id="rateVal">0.85x</span>
         </div>
       </div>
     </div>
@@ -385,6 +425,8 @@
       <span></span><span></span><span></span><span></span><span></span>
     </div>
 
+    <div class="key-badge" id="keyBadge"><kbd id="keyBadgeText">Space</kbd></div>
+
     <div class="controls">
       <button class="btn btn-primary" id="playBtn">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -403,7 +445,7 @@
   </div>
 
   <footer>
-    Needs microphone and speaker access. Works best in Chrome or Edge.<br>
+    Needs speaker access (and microphone if you choose voice mode). Works best in Chrome or Edge.<br>
     Serve over <b style="color:var(--muted)">http(s)</b>, not opened directly as a file, for reliable mic permission.
   </footer>
 
@@ -424,6 +466,9 @@
   const progressFill = document.getElementById('progressFill');
   const meter = document.getElementById('meter');
   const hintText = document.getElementById('hintText');
+  const modeTag = document.getElementById('modeTag');
+  const keyBadge = document.getElementById('keyBadge');
+  const keyBadgeText = document.getElementById('keyBadgeText');
 
   const settingsToggle = document.getElementById('settingsToggle');
   const settingsPanel = document.getElementById('settingsPanel');
@@ -431,6 +476,7 @@
   const chunkSizeVal = document.getElementById('chunkSizeVal');
   const rateInput = document.getElementById('rate');
   const rateVal = document.getElementById('rateVal');
+  const continueMethodSelect = document.getElementById('continueMethod');
 
   let words = [];
   let index = 0;
@@ -438,9 +484,44 @@
   let running = false;
   let recognition = null;
   let meterInterval = null;
+  let waitingForKey = false;
+  let voices = [];
+  let preferredVoice = null;
 
   const synth = window.speechSynthesis;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // ---- Voice selection: aim for a clear, simple, widely-understandable accent ----
+  function loadVoices() {
+    voices = synth.getVoices();
+    if (!voices.length) return;
+    // Preference order: Indian English -> British English -> generic English -> anything
+    preferredVoice =
+      voices.find(v => v.lang === 'en-IN') ||
+      voices.find(v => v.lang && v.lang.toLowerCase().startsWith('en-in')) ||
+      voices.find(v => v.lang === 'en-GB') ||
+      voices.find(v => v.lang && v.lang.toLowerCase().startsWith('en')) ||
+      voices[0];
+  }
+  loadVoices();
+  if (synth.onvoiceschanged !== undefined) {
+    synth.onvoiceschanged = loadVoices;
+  }
+
+  function updateModeUI() {
+    const method = continueMethodSelect.value;
+    if (method === 'space') {
+      modeTag.textContent = 'press Space to continue';
+      keyBadgeText.textContent = 'Space';
+    } else if (method === 'enter') {
+      modeTag.textContent = 'press Enter to continue';
+      keyBadgeText.textContent = 'Enter';
+    } else {
+      modeTag.textContent = 'say "ok" to continue';
+    }
+  }
+  continueMethodSelect.addEventListener('change', updateModeUI);
+  updateModeUI();
 
   settingsToggle.addEventListener('click', () => {
     settingsPanel.classList.toggle('open');
@@ -450,7 +531,7 @@
     chunkSizeVal.textContent = chunkSizeInput.value;
   });
   rateInput.addEventListener('input', () => {
-    rateVal.textContent = parseFloat(rateInput.value).toFixed(1) + 'x';
+    rateVal.textContent = parseFloat(rateInput.value).toFixed(2) + 'x';
   });
 
   function setStatus(text, mode) {
@@ -461,6 +542,7 @@
   function setMeterActive(active) {
     if (active) {
       meter.classList.add('active');
+      meter.classList.remove('key-wait');
       meterInterval = setInterval(() => {
         [...meter.children].forEach(bar => {
           bar.style.height = (20 + Math.random() * 80) + '%';
@@ -468,6 +550,7 @@
       }, 120);
     } else {
       meter.classList.remove('active');
+      meter.classList.remove('key-wait');
       clearInterval(meterInterval);
       [...meter.children].forEach(bar => bar.style.height = '20%');
     }
@@ -484,6 +567,8 @@
     synth.cancel();
     if (recognition) { try { recognition.stop(); } catch(e){} }
     setMeterActive(false);
+    keyBadge.classList.remove('show');
+    waitingForKey = false;
     index = 0;
     running = false;
     paused = true;
@@ -491,8 +576,6 @@
     setStatus('Ready', '');
     hintText.innerHTML = 'Enter text, then press <b>Start</b>';
     playBtn.disabled = false;
-    playBtn.querySelector('svg').outerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
-    playBtn.lastChild.textContent = ' Start';
     pauseBtn.disabled = true;
     stopBtn.disabled = true;
     sourceEl.disabled = false;
@@ -502,11 +585,7 @@
     if (!running || paused) return;
 
     if (index >= words.length) {
-      setStatus('Finished', '');
-      hintText.textContent = 'All done. Press Reset to read again.';
-      running = false;
-      playBtn.disabled = true;
-      pauseBtn.disabled = true;
+      finishReading();
       return;
     }
 
@@ -514,7 +593,16 @@
     const chunk = words.slice(index, index + chunkSize).join(' ');
     const utter = new SpeechSynthesisUtterance(chunk);
     utter.rate = parseFloat(rateInput.value);
+    utter.pitch = 1;
+    if (preferredVoice) {
+      utter.voice = preferredVoice;
+      utter.lang = preferredVoice.lang;
+    } else {
+      utter.lang = 'en-IN';
+    }
 
+    setMeterActive(false);
+    keyBadge.classList.remove('show');
     setStatus('Reading…', 'speaking');
     hintText.textContent = 'Reading aloud';
 
@@ -524,70 +612,128 @@
       if (!running || paused) return;
 
       if (index >= words.length) {
-        setStatus('Finished', '');
-        hintText.textContent = 'All done. Press Reset to read again.';
-        running = false;
-        playBtn.disabled = true;
-        pauseBtn.disabled = true;
+        finishReading();
         return;
       }
 
-      if (SpeechRecognition) {
-        listenForOk();
-      } else {
-        // Fallback: no recognition support, just continue after a short pause
-        setStatus('Paused — recognition unavailable, continuing…', '');
-        setTimeout(speakNextChunk, 1500);
-      }
+      waitForContinue();
     };
 
     synth.speak(utter);
   }
 
+  function finishReading() {
+    setStatus('Finished', '');
+    hintText.textContent = 'All done. Press Reset to read again.';
+    running = false;
+    playBtn.disabled = true;
+    pauseBtn.disabled = true;
+    setMeterActive(false);
+    keyBadge.classList.remove('show');
+    waitingForKey = false;
+  }
+
+  function waitForContinue() {
+    const method = continueMethodSelect.value;
+
+    if (method === 'space' || method === 'enter') {
+      waitingForKey = true;
+      const label = method === 'space' ? 'Space' : 'Enter';
+      setStatus('Paused — press ' + label + ' to continue', 'waiting-key');
+      hintText.textContent = 'Write what you heard, then press ' + label;
+      keyBadge.classList.add('show');
+      meter.classList.add('key-wait');
+      return;
+    }
+
+    // voice mode
+    if (SpeechRecognition) {
+      listenForOk();
+    } else {
+      setStatus('Paused — recognition unavailable, continuing…', '');
+      hintText.textContent = 'Voice recognition not supported here — continuing automatically';
+      setTimeout(speakNextChunk, 1500);
+    }
+  }
+
   function listenForOk() {
     setStatus('Paused — say "ok" to continue', 'listening');
     hintText.textContent = 'Write what you heard, then say "ok"';
+    keyBadge.classList.remove('show');
     setMeterActive(true);
 
+    if (recognition) {
+      try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){}
+    }
+
     recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.lang = 'en-IN';
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.maxAlternatives = 3;
 
-    recognition.onresult = (event) => {
-      const transcripts = [];
-      for (let i = 0; i < event.results[0].length; i++) {
-        transcripts.push(event.results[0][i].transcript.toLowerCase());
-      }
-      const heardOk = transcripts.some(t => /\bok(ay)?\b/.test(t));
-      if (heardOk) {
+    let resumed = false;
+
+    function checkTranscript(transcript) {
+      if (resumed) return;
+      const t = transcript.toLowerCase();
+      if (/\b(ok|okay|k)\b/.test(t)) {
+        resumed = true;
         setMeterActive(false);
-        if (running && !paused) speakNextChunk();
-      } else {
-        // didn't catch "ok" — listen again
-        if (running && !paused) listenForOk();
+        try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){}
+        if (running && !paused && continueMethodSelect.value === 'voice') speakNextChunk();
+      }
+    }
+
+    recognition.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let j = 0; j < event.results[i].length; j++) {
+          checkTranscript(event.results[i][j].transcript);
+        }
       }
     };
 
     recognition.onerror = (e) => {
-      setMeterActive(false);
-      if (e.error === 'no-speech' || e.error === 'aborted') {
-        if (running && !paused) listenForOk();
-      } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      if (resumed) return;
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        setMeterActive(false);
         setStatus('Microphone access denied', '');
-        hintText.textContent = 'Allow microphone access and press Start again';
+        hintText.textContent = 'Allow microphone access, or switch to Space/Enter in settings';
         running = false;
         paused = true;
       }
+      // other errors (no-speech, network, aborted) are handled by onend restart below
     };
 
     recognition.onend = () => {
-      // handled by onresult / onerror flow
+      if (!resumed && running && !paused && continueMethodSelect.value === 'voice') {
+        // keep listening until the user says the word
+        try { recognition.start(); } catch(e){}
+      }
     };
 
     try { recognition.start(); } catch(e) {}
   }
+
+  // ---- Keyboard continue (Space / Enter) ----
+  document.addEventListener('keydown', (e) => {
+    if (!waitingForKey || !running || paused) return;
+    const method = continueMethodSelect.value;
+
+    if (method === 'space' && e.code === 'Space') {
+      e.preventDefault();
+      waitingForKey = false;
+      keyBadge.classList.remove('show');
+      meter.classList.remove('key-wait');
+      speakNextChunk();
+    } else if (method === 'enter' && e.key === 'Enter') {
+      e.preventDefault();
+      waitingForKey = false;
+      keyBadge.classList.remove('show');
+      meter.classList.remove('key-wait');
+      speakNextChunk();
+    }
+  });
 
   playBtn.addEventListener('click', () => {
     if (!running) {
@@ -609,9 +755,11 @@
 
   pauseBtn.addEventListener('click', () => {
     paused = true;
+    waitingForKey = false;
     synth.cancel();
-    if (recognition) { try { recognition.stop(); } catch(e){} }
+    if (recognition) { try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){} }
     setMeterActive(false);
+    keyBadge.classList.remove('show');
     setStatus('Paused', '');
     hintText.innerHTML = 'Press <b>Start</b> to resume';
     playBtn.disabled = false;
@@ -621,7 +769,9 @@
   stopBtn.addEventListener('click', resetAll);
 
   if (!SpeechRecognition) {
-    hintText.textContent = 'Speech recognition not supported in this browser — will auto-continue after each pause';
+    // if voice mode gets selected but isn't supported, note it
+    const opt = [...continueMethodSelect.options].find(o => o.value === 'voice');
+    if (opt) opt.textContent = 'Voice — not supported in this browser';
   }
 
   updateProgress();
