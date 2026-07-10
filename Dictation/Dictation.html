@@ -349,14 +349,61 @@
     .controls { flex-wrap: wrap; }
     .hint { margin-left: 0; width: 100%; margin-top: 8px; }
   }
+
+  /* Phrase display — shown large during dictation for spelling reference */
+  .phrase-display {
+    display: none;
+    text-align: center;
+    padding: 10px 4px 34px;
+  }
+  .phrase-label {
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 14px;
+    font-weight: 600;
+    min-height: 16px;
+  }
+  .phrase-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(22px, 4vw, 40px);
+    line-height: 1.5;
+    color: var(--text);
+    word-wrap: break-word;
+  }
+
+  /* Full-screen dictation (focus) mode — hides the rest of the page */
+  body.dictating #setupSection,
+  body.dictating #setupFooter {
+    display: none;
+  }
+  body.dictating .console {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    max-width: none;
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 5vh 8vw;
+    z-index: 30;
+  }
+  body.dictating .phrase-display { display: block; }
+  body.dictating .wrap { padding: 0; max-width: none; }
 </style>
 </head>
 <body>
 
 <div class="wrap">
 
+  <div id="setupSection">
   <h2 class="page-title">Dicta<span>tion</span></h2>
-  <p class="page-sub">Speak-paced reading for text you need to write down.</p>
+  <p class="page-sub">Speak-paced reading for text you need to write down — now with paragraph, bullet, and heading cues.</p>
 
   <header>
     <div class="brand">
@@ -386,8 +433,8 @@
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">Words per pause</div>
-          <div class="setting-sub">How many words are read before it stops and waits</div>
+          <div class="setting-label">Max words per phrase</div>
+          <div class="setting-sub">It pauses at a natural phrase break, but never reads more than this many words first</div>
         </div>
         <div class="setting-control">
           <input type="range" id="chunkSize" min="3" max="50" value="15">
@@ -407,9 +454,15 @@
     </div>
   </div>
 
-  <textarea id="source" placeholder="Paste or type the text you want dictated..."></textarea>
+  <textarea id="source" placeholder="Paste or type your text...&#10;&#10;Supports formatting:&#10;- Bullet points (start a line with - or *)&#10;1. Numbered points (start a line with 1. 2. 3. ...)&#10;# Headings (start a line with #)&#10;Leave a blank line between paragraphs."></textarea>
+  </div>
 
   <div class="console">
+    <div class="phrase-display" id="phraseDisplay">
+      <div class="phrase-label" id="phraseLabel"></div>
+      <div class="phrase-text" id="phraseText"></div>
+    </div>
+
     <div class="status-row">
       <div class="status-text">
         <span class="status-led" id="statusLed"></span>
@@ -436,6 +489,10 @@
         <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
         Pause
       </button>
+      <button class="btn" id="repeatBtn" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+        Repeat
+      </button>
       <button class="btn" id="stopBtn" disabled>
         <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
         Reset
@@ -444,12 +501,14 @@
     </div>
   </div>
 
+  <div id="setupFooter">
   <footer>
     Needs speaker access (and microphone if you choose voice mode). Works best in Chrome or Edge.<br>
     Serve over <b style="color:var(--muted)">http(s)</b>, not opened directly as a file, for reliable mic permission.
   </footer>
 
   <div class="quote">"Making the life of students easier one step at a time"</div>
+  </div>
 
 </div>
 
@@ -459,6 +518,7 @@
   const playBtn = document.getElementById('playBtn');
   const pauseBtn = document.getElementById('pauseBtn');
   const stopBtn = document.getElementById('stopBtn');
+  const repeatBtn = document.getElementById('repeatBtn');
   const statusText = document.getElementById('statusText');
   const statusLed = document.getElementById('statusLed');
   const wordsReadEl = document.getElementById('wordsRead');
@@ -469,6 +529,8 @@
   const modeTag = document.getElementById('modeTag');
   const keyBadge = document.getElementById('keyBadge');
   const keyBadgeText = document.getElementById('keyBadgeText');
+  const phraseLabel = document.getElementById('phraseLabel');
+  const phraseText = document.getElementById('phraseText');
 
   const settingsToggle = document.getElementById('settingsToggle');
   const settingsPanel = document.getElementById('settingsPanel');
@@ -478,8 +540,10 @@
   const rateVal = document.getElementById('rateVal');
   const continueMethodSelect = document.getElementById('continueMethod');
 
-  let words = [];
-  let index = 0;
+  let segments = [];   // [{type, text, words:[], announcement}]
+  let seg = 0;         // current segment index
+  let word = 0;        // current word index within segment
+  let totalWords = 0;
   let paused = true;
   let running = false;
   let recognition = null;
@@ -487,15 +551,103 @@
   let waitingForKey = false;
   let voices = [];
   let preferredVoice = null;
+  let lastSpoken = null; // {segIndex, startWord, nextIdx, label, phraseText}
+  let utteranceToken = 0; // invalidates any in-flight utterance's onend when we pause/reset
+  let isWaitingForContinue = false;
 
   const synth = window.speechSynthesis;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // ---- Parse plain text into structured segments (paragraphs, bullets, numbered points, headings) ----
+  function parseStructure(raw) {
+    const lines = raw.split(/\n/);
+    const segs = [];
+    let paraLines = [];
+    let prevType = null;
+
+    function flushParagraph() {
+      if (paraLines.length) {
+        const text = paraLines.join(' ').trim();
+        if (text) {
+          segs.push({
+            type: 'paragraph',
+            text,
+            words: text.split(/\s+/).filter(Boolean),
+            announcement: prevType !== null ? 'New paragraph' : null
+          });
+          prevType = 'paragraph';
+        }
+        paraLines = [];
+      }
+    }
+
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (trimmed === '') { flushParagraph(); return; }
+
+      const bulletMatch = trimmed.match(/^[-*•]\s+(.*)/);
+      const numberedMatch = trimmed.match(/^(\d+)[.)]\s+(.*)/);
+      const headingMatch = trimmed.match(/^#{1,6}\s+(.*)/);
+
+      if (bulletMatch) {
+        flushParagraph();
+        const text = bulletMatch[1].trim();
+        segs.push({
+          type: 'bullet',
+          text,
+          words: text.split(/\s+/).filter(Boolean),
+          announcement: prevType === 'bullet' ? 'Next bullet point' : 'Bullet point'
+        });
+        prevType = 'bullet';
+      } else if (numberedMatch) {
+        flushParagraph();
+        const text = numberedMatch[2].trim();
+        segs.push({
+          type: 'numbered',
+          text,
+          words: text.split(/\s+/).filter(Boolean),
+          announcement: 'Point ' + numberedMatch[1]
+        });
+        prevType = 'numbered';
+      } else if (headingMatch) {
+        flushParagraph();
+        const text = headingMatch[1].trim();
+        segs.push({
+          type: 'heading',
+          text,
+          words: text.split(/\s+/).filter(Boolean),
+          announcement: 'Heading'
+        });
+        prevType = 'heading';
+      } else {
+        paraLines.push(trimmed);
+      }
+    });
+    flushParagraph();
+    return segs;
+  }
+
+  // ---- Find the next natural phrase break within a segment's words, capped by maxWords ----
+  function nextPhraseChunk(wordsArr, startIdx, maxWords) {
+    let i = startIdx;
+    let count = 0;
+    while (i < wordsArr.length) {
+      const w = wordsArr[i];
+      count++;
+      i++;
+      const endsSentence = /[.!?]["')]*$/.test(w);
+      const endsClause = /[,;:]["')]*$/.test(w);
+      if (count >= maxWords) break;
+      if (endsSentence) break;
+      if (endsClause && count >= Math.min(4, maxWords)) break;
+    }
+    return { words: wordsArr.slice(startIdx, i), nextIdx: i };
+  }
 
   // ---- Voice selection: aim for a clear, simple, widely-understandable accent ----
   function loadVoices() {
     voices = synth.getVoices();
     if (!voices.length) return;
-    // Preference order: Indian English -> British English -> generic English -> anything
     preferredVoice =
       voices.find(v => v.lang === 'en-IN') ||
       voices.find(v => v.lang && v.lang.toLowerCase().startsWith('en-in')) ||
@@ -520,7 +672,19 @@
       modeTag.textContent = 'say "ok" to continue';
     }
   }
-  continueMethodSelect.addEventListener('change', updateModeUI);
+  continueMethodSelect.addEventListener('change', () => {
+    updateModeUI();
+    // If we're currently paused waiting for a continue signal, switch the active
+    // wait method right away instead of leaving it listening for the old one.
+    if (running && !paused && isWaitingForContinue) {
+      if (recognition) { try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){} }
+      waitingForKey = false;
+      keyBadge.classList.remove('show');
+      meter.classList.remove('key-wait');
+      setMeterActive(false);
+      waitForContinue();
+    }
+  });
   updateModeUI();
 
   settingsToggle.addEventListener('click', () => {
@@ -556,42 +720,75 @@
     }
   }
 
+  function wordsReadSoFar() {
+    let count = 0;
+    for (let i = 0; i < seg; i++) count += segments[i].words.length;
+    count += word;
+    return count;
+  }
+
   function updateProgress() {
-    wordsReadEl.textContent = index;
-    wordsTotalEl.textContent = words.length;
-    const pct = words.length ? (index / words.length) * 100 : 0;
+    const readCount = wordsReadSoFar();
+    wordsReadEl.textContent = readCount;
+    wordsTotalEl.textContent = totalWords;
+    const pct = totalWords ? (readCount / totalWords) * 100 : 0;
     progressFill.style.width = pct + '%';
   }
 
+  function showPhraseOnScreen(label, text) {
+    phraseLabel.textContent = label || '';
+    phraseText.textContent = text || '';
+  }
+
   function resetAll() {
+    utteranceToken += 1;
     synth.cancel();
-    if (recognition) { try { recognition.stop(); } catch(e){} }
+    if (recognition) { try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){} }
     setMeterActive(false);
     keyBadge.classList.remove('show');
     waitingForKey = false;
-    index = 0;
+    isWaitingForContinue = false;
+    lastSpoken = null;
+    seg = 0;
+    word = 0;
     running = false;
     paused = true;
+    document.body.classList.remove('dictating');
+    showPhraseOnScreen('', '');
     updateProgress();
     setStatus('Ready', '');
     hintText.innerHTML = 'Enter text, then press <b>Start</b>';
     playBtn.disabled = false;
     pauseBtn.disabled = true;
+    repeatBtn.disabled = true;
     stopBtn.disabled = true;
     sourceEl.disabled = false;
   }
 
-  function speakNextChunk() {
+  function speakChunk(segIndex, startWord, isRepeat) {
     if (!running || paused) return;
 
-    if (index >= words.length) {
+    if (segIndex >= segments.length) {
       finishReading();
       return;
     }
 
-    const chunkSize = parseInt(chunkSizeInput.value, 10);
-    const chunk = words.slice(index, index + chunkSize).join(' ');
-    const utter = new SpeechSynthesisUtterance(chunk);
+    const current = segments[segIndex];
+    const maxWords = parseInt(chunkSizeInput.value, 10);
+    const { words: chunkWords, nextIdx } = nextPhraseChunk(current.words, startWord, maxWords);
+    let spokenText = chunkWords.join(' ');
+    let label = '';
+
+    if (startWord === 0 && current.announcement) {
+      label = current.announcement;
+      spokenText = label + '. ' + spokenText;
+    }
+
+    lastSpoken = { segIndex, startWord, nextIdx, label, phraseText: chunkWords.join(' ') };
+    showPhraseOnScreen(label, chunkWords.join(' '));
+    repeatBtn.disabled = false;
+
+    const utter = new SpeechSynthesisUtterance(spokenText);
     utter.rate = parseFloat(rateInput.value);
     utter.pitch = 1;
     if (preferredVoice) {
@@ -603,15 +800,30 @@
 
     setMeterActive(false);
     keyBadge.classList.remove('show');
-    setStatus('Reading…', 'speaking');
-    hintText.textContent = 'Reading aloud';
+    isWaitingForContinue = false;
+    setStatus(isRepeat ? 'Repeating…' : 'Reading…', 'speaking');
+    hintText.textContent = label && startWord === 0 && !isRepeat ? label + ' — reading aloud' : (isRepeat ? 'Repeating phrase' : 'Reading aloud');
+
+    utteranceToken += 1;
+    const myToken = utteranceToken;
 
     utter.onend = () => {
-      index += chunk.split(/\s+/).filter(Boolean).length;
-      updateProgress();
+      // If a pause/reset happened after this utterance started, the token will have
+      // moved on — ignore this stale callback so we never skip or corrupt position.
+      if (myToken !== utteranceToken) return;
+
+      if (!isRepeat) {
+        seg = segIndex;
+        word = nextIdx;
+        if (word >= current.words.length) {
+          seg = segIndex + 1;
+          word = 0;
+        }
+        updateProgress();
+      }
       if (!running || paused) return;
 
-      if (index >= words.length) {
+      if (seg >= segments.length) {
         finishReading();
         return;
       }
@@ -622,18 +834,30 @@
     synth.speak(utter);
   }
 
+  function speakNextChunk() {
+    speakChunk(seg, word, false);
+  }
+
+  function repeatLastChunk() {
+    if (!lastSpoken || !running || paused) return;
+    speakChunk(lastSpoken.segIndex, lastSpoken.startWord, true);
+  }
+
   function finishReading() {
     setStatus('Finished', '');
     hintText.textContent = 'All done. Press Reset to read again.';
     running = false;
     playBtn.disabled = true;
     pauseBtn.disabled = true;
+    repeatBtn.disabled = true;
     setMeterActive(false);
     keyBadge.classList.remove('show');
     waitingForKey = false;
+    isWaitingForContinue = false;
   }
 
   function waitForContinue() {
+    isWaitingForContinue = true;
     const method = continueMethodSelect.value;
 
     if (method === 'space' || method === 'enter') {
@@ -657,8 +881,8 @@
   }
 
   function listenForOk() {
-    setStatus('Paused — say "ok" to continue', 'listening');
-    hintText.textContent = 'Write what you heard, then say "ok"';
+    setStatus('Paused — say "ok" to continue, or "repeat"', 'listening');
+    hintText.textContent = 'Write what you heard — say "ok" to continue, or "repeat" to hear it again';
     keyBadge.classList.remove('show');
     setMeterActive(true);
 
@@ -677,6 +901,13 @@
     function checkTranscript(transcript) {
       if (resumed) return;
       const t = transcript.toLowerCase();
+      if (/\brepeat\b/.test(t)) {
+        resumed = true;
+        setMeterActive(false);
+        try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){}
+        if (running && !paused && continueMethodSelect.value === 'voice') repeatLastChunk();
+        return;
+      }
       if (/\b(ok|okay|k)\b/.test(t)) {
         resumed = true;
         setMeterActive(false);
@@ -737,13 +968,15 @@
 
   playBtn.addEventListener('click', () => {
     if (!running) {
-      words = sourceEl.value.trim().split(/\s+/).filter(Boolean);
-      if (words.length === 0) {
+      segments = parseStructure(sourceEl.value);
+      totalWords = segments.reduce((sum, s) => sum + s.words.length, 0);
+      if (totalWords === 0) {
         setStatus('Enter some text first', '');
         return;
       }
-      wordsTotalEl.textContent = words.length;
+      wordsTotalEl.textContent = totalWords;
       sourceEl.disabled = true;
+      document.body.classList.add('dictating');
     }
     running = true;
     paused = false;
@@ -756,6 +989,8 @@
   pauseBtn.addEventListener('click', () => {
     paused = true;
     waitingForKey = false;
+    isWaitingForContinue = false;
+    utteranceToken += 1;
     synth.cancel();
     if (recognition) { try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch(e){} }
     setMeterActive(false);
@@ -764,12 +999,17 @@
     hintText.innerHTML = 'Press <b>Start</b> to resume';
     playBtn.disabled = false;
     pauseBtn.disabled = true;
+    repeatBtn.disabled = true;
+  });
+
+  repeatBtn.addEventListener('click', () => {
+    if (paused || !running) return;
+    repeatLastChunk();
   });
 
   stopBtn.addEventListener('click', resetAll);
 
   if (!SpeechRecognition) {
-    // if voice mode gets selected but isn't supported, note it
     const opt = [...continueMethodSelect.options].find(o => o.value === 'voice');
     if (opt) opt.textContent = 'Voice — not supported in this browser';
   }
